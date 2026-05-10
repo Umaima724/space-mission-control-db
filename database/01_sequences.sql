@@ -1,0 +1,77 @@
+PROMPT ============================================
+PROMPT Creating Sequences for All 10 Entities
+PROMPT ============================================
+
+-- MISSION sequence (starts 1001)
+CREATE SEQUENCE SEQ_MISSION_ID
+    START WITH 1001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- SATELLITE sequence (starts 2001)
+CREATE SEQUENCE SEQ_SATELLITE_ID
+    START WITH 2001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- ORBIT sequence (starts 3001)
+CREATE SEQUENCE SEQ_ORBIT_ID
+    START WITH 3001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- LAUNCH_VEHICLE sequence (starts 4001)
+CREATE SEQUENCE SEQ_VEHICLE_ID
+    START WITH 4001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- GROUND_STATION sequence (starts 5001)
+CREATE SEQUENCE SEQ_STATION_ID
+    START WITH 5001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- CONTROL_CENTER sequence (starts 6001)
+CREATE SEQUENCE SEQ_CENTER_ID
+    START WITH 6001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- CONTACT_WINDOW sequence (starts 7001)
+CREATE SEQUENCE SEQ_WINDOW_ID
+    START WITH 7001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- TELEMETRY_LOG sequence (starts 8001)
+CREATE SEQUENCE SEQ_TELEMETRY_ID
+    START WITH 8001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- ANOMALY_REPORT sequence (starts 9001)
+CREATE SEQUENCE SEQ_ANOMALY_ID
+    START WITH 9001
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+-- OPERATOR sequence (starts 1)
+CREATE SEQUENCE SEQ_OPERATOR_ID
+    START WITH 1
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+PROMPT ============================================
+PROMPT All 10 Sequences Created Successfully
+PROMPT ============================================
