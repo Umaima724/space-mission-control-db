@@ -1,26 +1,24 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import DataGrid from '../components/DataGrid'
 import SearchFilter from '../components/SearchFilter'
 import ExportButton from '../components/ExportButton'
-import { useApi } from '../hooks/useApi'
+import api from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 
 const satelliteColumns = [
   { key: 'satellite_name', label: 'Satellite' },
-  { key: 'norad_id', label: 'NORAD ID' },
   { key: 'mission_name', label: 'Mission' },
   { key: 'status', label: 'Status', type: 'status' },
-  { key: 'orbit_type', label: 'Orbit' },
-  { key: 'altitude_km', label: 'Altitude (km)' },
-  { key: 'health_score', label: 'Health %' },
+  { key: 'mass_kg', label: 'Mass (kg)' },
+  { key: 'frequency_mhz', label: 'Frequency (MHz)' },
+  { key: 'launch_date', label: 'Launch Date', type: 'date' },
 ]
 
 const statusFilters = [
-  { value: 'OPERATIONAL', label: 'Operational' },
-  { value: 'DEGRADED', label: 'Degraded' },
-  { value: 'OFFLINE', label: 'Offline' },
-  { value: 'MAINTENANCE', label: 'Maintenance' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'INACTIVE', label: 'Inactive' },
+  { value: 'DECOMMISSIONED', label: 'Decommissioned' },
 ]
 
 export default function Satellites() {
@@ -31,54 +29,66 @@ export default function Satellites() {
   const [filters, setFilters] = useState({})
   const [showModal, setShowModal] = useState(false)
   const [editingSatellite, setEditingSatellite] = useState(null)
-  const { get, post, put, del, loading } = useApi()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const { hasRole } = useAuth()
 
-  const fetchSatellites = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+
     const params = new URLSearchParams()
     params.append('page', page)
     params.append('page_size', 10)
     if (search) params.append('search', search)
     if (filters.status) params.append('status', filters.status)
 
-    const data = await get(`/satellites?${params}`)
-    setSatellites(data.items || [])
-    setTotal(data.total || 0)
-  }, [page, search, filters, get])
+    api.get(`/satellites?${params}`)
+      .then(res => {
+        if (!cancelled) {
+          setSatellites(res.data.items || [])
+          setTotal(res.data.total || 0)
+        }
+      })
+      .catch(err => {
+        if (!cancelled) setError(err.response?.data?.detail || 'Failed to load satellites')
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
 
-  useEffect(() => {
-    fetchSatellites()
-  }, [fetchSatellites])
+    return () => { cancelled = true }
+  }, [page, search, filters])
 
   const handleSave = async (e) => {
     e.preventDefault()
     const formData = new FormData(e.target)
     const payload = Object.fromEntries(formData)
     if (payload.mission_id) payload.mission_id = parseInt(payload.mission_id)
-    if (payload.altitude_km) payload.altitude_km = parseFloat(payload.altitude_km)
-    if (payload.health_score) payload.health_score = parseFloat(payload.health_score)
+    if (payload.orbit_id) payload.orbit_id = parseInt(payload.orbit_id)
+    if (payload.mass_kg) payload.mass_kg = parseFloat(payload.mass_kg)
+    if (payload.frequency_mhz) payload.frequency_mhz = parseFloat(payload.frequency_mhz)
 
     try {
       if (editingSatellite) {
-        await put(`/satellites/${editingSatellite.satellite_id}`, payload)
+        await api.put(`/satellites/${editingSatellite.satellite_id}`, payload)
       } else {
-        await post('/satellites', payload)
+        await api.post('/satellites', payload)
       }
       setShowModal(false)
       setEditingSatellite(null)
-      fetchSatellites()
-    } catch {
-      // handled by useApi
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save satellite')
     }
   }
 
   const handleDelete = async (sat) => {
     if (!confirm('Delete this satellite?')) return
     try {
-      await del(`/satellites/${sat.satellite_id}`)
-      fetchSatellites()
-    } catch {
-      // handled by useApi
+      await api.delete(`/satellites/${sat.satellite_id}`)
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to delete satellite')
     }
   }
 
@@ -99,6 +109,12 @@ export default function Satellites() {
           )}
         </div>
       </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
 
       <SearchFilter
         onSearch={setSearch}
@@ -137,41 +153,34 @@ export default function Satellites() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">NORAD ID</label>
-                  <input name="norad_id" defaultValue={editingSatellite?.norad_id} className="input-field" />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Mission ID *</label>
+                  <input name="mission_id" type="number" defaultValue={editingSatellite?.mission_id} className="input-field" required />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Mission ID</label>
-                  <input name="mission_id" type="number" defaultValue={editingSatellite?.mission_id} className="input-field" />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Orbit ID</label>
+                  <input name="orbit_id" type="number" defaultValue={editingSatellite?.orbit_id} className="input-field" />
                 </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Launch Date *</label>
+                <input name="launch_date" type="date" defaultValue={editingSatellite?.launch_date?.split('T')[0]} className="input-field" required />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Launch Date</label>
-                  <input name="launch_date" type="date" defaultValue={editingSatellite?.launch_date?.split('T')[0]} className="input-field" />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Mass (kg) *</label>
+                  <input name="mass_kg" type="number" step="0.01" defaultValue={editingSatellite?.mass_kg} className="input-field" required />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Orbit Type</label>
-                  <input name="orbit_type" defaultValue={editingSatellite?.orbit_type} className="input-field" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Altitude (km)</label>
-                  <input name="altitude_km" type="number" step="0.1" defaultValue={editingSatellite?.altitude_km} className="input-field" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Health Score</label>
-                  <input name="health_score" type="number" min="0" max="100" step="0.1" defaultValue={editingSatellite?.health_score} className="input-field" />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Frequency (MHz) *</label>
+                  <input name="frequency_mhz" type="number" step="0.001" defaultValue={editingSatellite?.frequency_mhz} className="input-field" required />
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-space-700 mb-1">Status</label>
-                <select name="status" defaultValue={editingSatellite?.status || 'OPERATIONAL'} className="input-field">
-                  <option value="OPERATIONAL">Operational</option>
-                  <option value="DEGRADED">Degraded</option>
-                  <option value="OFFLINE">Offline</option>
-                  <option value="MAINTENANCE">Maintenance</option>
+                <select name="status" defaultValue={editingSatellite?.status || 'ACTIVE'} className="input-field">
+                  <option value="ACTIVE">Active</option>
+                  <option value="INACTIVE">Inactive</option>
+                  <option value="DECOMMISSIONED">Decommissioned</option>
                 </select>
               </div>
               <div className="flex justify-end gap-3 pt-4">

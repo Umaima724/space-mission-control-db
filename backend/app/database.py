@@ -6,6 +6,8 @@ from .config import get_settings
 
 settings = get_settings()
 
+oracledb.init_oracle_client(lib_dir=r"C:\oraclexe\app\oracle\product\11.2.0\server\bin")
+
 pool = None
 
 def init_pool():

@@ -18,9 +18,9 @@ async def get_dashboard(
     kpis = []
     
     # Total missions
-    cursor.execute("SELECT COUNT(*) FROM MISSIONS")
+    cursor.execute("SELECT COUNT(*) FROM MISSION")
     total_missions = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM MISSIONS WHERE status = 'ACTIVE'")
+    cursor.execute("SELECT COUNT(*) FROM MISSION WHERE status = 'ACTIVE'")
     active_missions = cursor.fetchone()[0]
     kpis.append(KpiCard(
         title="Total Missions",
@@ -31,9 +31,9 @@ async def get_dashboard(
     ))
     
     # Total satellites
-    cursor.execute("SELECT COUNT(*) FROM SATELLITES")
+    cursor.execute("SELECT COUNT(*) FROM SATELLITE")
     total_satellites = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM SATELLITES WHERE status = 'OPERATIONAL'")
+    cursor.execute("SELECT COUNT(*) FROM SATELLITE WHERE status = 'ACTIVE'")  # FIXED: 'OPERATIONAL' -> 'ACTIVE'
     operational = cursor.fetchone()[0]
     kpis.append(KpiCard(
         title="Satellites",
@@ -44,9 +44,9 @@ async def get_dashboard(
     ))
     
     # Active anomalies
-    cursor.execute("SELECT COUNT(*) FROM ANOMALIES WHERE status IN ('OPEN', 'INVESTIGATING')")
+    cursor.execute("SELECT COUNT(*) FROM ANOMALY_REPORT WHERE resolved = 'N'")  # FIXED: status -> resolved
     active_anomalies = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM ANOMALIES WHERE severity = 'CRITICAL' AND status IN ('OPEN', 'INVESTIGATING')")
+    cursor.execute("SELECT COUNT(*) FROM ANOMALY_REPORT WHERE severity = 'CRITICAL' AND resolved = 'N'")  # FIXED
     critical = cursor.fetchone()[0]
     kpis.append(KpiCard(
         title="Active Anomalies",
@@ -57,7 +57,7 @@ async def get_dashboard(
     ))
     
     # Ground stations
-    cursor.execute("SELECT COUNT(*) FROM GROUND_STATIONS")
+    cursor.execute("SELECT COUNT(*) FROM GROUND_STATION")
     total_stations = cursor.fetchone()[0]
     kpis.append(KpiCard(
         title="Ground Stations",
@@ -70,7 +70,7 @@ async def get_dashboard(
     charts = {}
     
     # Mission status distribution
-    cursor.execute("SELECT status, COUNT(*) FROM MISSIONS GROUP BY status")
+    cursor.execute("SELECT status, COUNT(*) FROM MISSION GROUP BY status")
     mission_status = {"labels": [], "data": []}
     for row in cursor:
         mission_status["labels"].append(row[0])
@@ -78,15 +78,15 @@ async def get_dashboard(
     charts["missionStatus"] = mission_status
     
     # Satellite status distribution
-    cursor.execute("SELECT status, COUNT(*) FROM SATELLITES GROUP BY status")
+    cursor.execute("SELECT status, COUNT(*) FROM SATELLITE GROUP BY status")
     sat_status = {"labels": [], "data": []}
     for row in cursor:
         sat_status["labels"].append(row[0])
         sat_status["data"].append(row[1])
     charts["satelliteStatus"] = sat_status
     
-    # Anomalies by severity
-    cursor.execute("SELECT severity, COUNT(*) FROM ANOMALIES WHERE status IN ('OPEN', 'INVESTIGATING') GROUP BY severity")
+    # Anomalies by severity (only open ones)
+    cursor.execute("SELECT severity, COUNT(*) FROM ANOMALY_REPORT WHERE resolved = 'N' GROUP BY severity")  # FIXED
     anomaly_sev = {"labels": [], "data": []}
     for row in cursor:
         anomaly_sev["labels"].append(row[0])
@@ -95,12 +95,12 @@ async def get_dashboard(
     
     # Telemetry volume last 7 days
     cursor.execute("""
-        SELECT TO_CHAR(TRUNC(timestamp), 'YYYY-MM-DD') as day, COUNT(*)
-        FROM TELEMETRY
-        WHERE timestamp >= TRUNC(SYSDATE) - 6
-        GROUP BY TRUNC(timestamp)
+        SELECT TO_CHAR(TRUNC(recorded_at), 'YYYY-MM-DD') as day, COUNT(*)
+        FROM TELEMETRY_LOG
+        WHERE recorded_at >= TRUNC(SYSDATE) - 6
+        GROUP BY TRUNC(recorded_at)
         ORDER BY day
-    """)
+    """)  # FIXED: timestamp -> recorded_at
     telemetry_vol = {"labels": [], "data": []}
     for row in cursor:
         telemetry_vol["labels"].append(row[0])

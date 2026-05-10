@@ -8,6 +8,7 @@ from ..routers.auth import get_current_user, require_role, UserRole
 
 router = APIRouter(prefix="/missions", tags=["Missions"])
 
+
 @router.get("", response_model=PaginatedResponse)
 async def list_missions(
     page: int = Query(1, ge=1),
@@ -32,20 +33,27 @@ async def list_missions(
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
     
     # Count total
-    count_sql = f"SELECT COUNT(*) FROM MISSIONS {where_clause}"
+    count_sql = f"SELECT COUNT(*) FROM MISSION {where_clause}"
     cursor.execute(count_sql, params)
     total = cursor.fetchone()[0]
     
-    # Fetch data with pagination
+    # Fetch data with Oracle 11g pagination using ROWNUM
     offset = (page - 1) * page_size
+    end_row = offset + page_size
+    
     sql = f"""
-        SELECT m.*, (SELECT COUNT(*) FROM SATELLITES WHERE mission_id = m.mission_id) as satellite_count
-        FROM MISSIONS m
-        {where_clause}
-        ORDER BY m.created_at DESC
-        OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
+        SELECT * FROM (
+            SELECT a.*, ROWNUM rn FROM (
+                SELECT m.mission_id, m.mission_name, m.mission_type, m.launch_date,
+                       m.status, m.objective, m.agency_name,
+                       (SELECT COUNT(*) FROM SATELLITE WHERE mission_id = m.mission_id) as satellite_count
+                FROM MISSION m
+                {where_clause}
+                ORDER BY m.launch_date DESC
+            ) a WHERE ROWNUM <= :end_row
+        ) WHERE rn > :offset
     """
-    cursor.execute(sql, params + [offset, page_size])
+    cursor.execute(sql, params + [end_row, offset])
     
     columns = [col[0].lower() for col in cursor.description]
     items = []
@@ -62,6 +70,7 @@ async def list_missions(
         total_pages=(total + page_size - 1) // page_size,
     )
 
+
 @router.get("/{mission_id}", response_model=MissionResponse)
 async def get_mission(
     mission_id: int,
@@ -69,7 +78,11 @@ async def get_mission(
     current_user: dict = Depends(get_current_user),
 ):
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM MISSIONS WHERE mission_id = :id", {"id": mission_id})
+    cursor.execute("""
+        SELECT mission_id, mission_name, mission_type, launch_date, status, objective, agency_name
+        FROM MISSION 
+        WHERE mission_id = :id
+    """, {"id": mission_id})
     row = cursor.fetchone()
     if not row:
         cursor.close()
@@ -80,6 +93,7 @@ async def get_mission(
     cursor.close()
     return result
 
+
 @router.post("", response_model=MissionResponse, status_code=201)
 async def create_mission(
     mission: MissionCreate,
@@ -87,43 +101,30 @@ async def create_mission(
     current_user: dict = Depends(require_role([UserRole.ADMIN, UserRole.OPERATOR])),
 ):
     cursor = conn.cursor()
+    
     sql = """
-        INSERT INTO MISSIONS (mission_id, mission_name, launch_date, end_date, status, objective, budget, lead_agency)
-        VALUES (MISSION_SEQ.NEXTVAL, :name, :launch, :end, :status, :obj, :budget, :agency)
-        RETURNING mission_id, created_at INTO :mid, :cat
+        INSERT INTO MISSION (mission_id, mission_name, mission_type, launch_date, status, objective, agency_name)
+        VALUES (SEQ_MISSION_ID.NEXTVAL, :name, :mtype, :launch, :status, :obj, :agency)
+        RETURNING mission_id INTO :mid
     """
     mid_var = cursor.var(oracledb.DB_TYPE_NUMBER)
-    cat_var = cursor.var(oracledb.DB_TYPE_TIMESTAMP)
     
     cursor.execute(sql, {
         "name": mission.mission_name,
+        "mtype": mission.mission_type,
         "launch": mission.launch_date,
-        "end": mission.end_date,
-        "status": mission.status.value,
+        "status": mission.status,
         "obj": mission.objective,
-        "budget": mission.budget,
-        "agency": mission.lead_agency,
+        "agency": mission.agency_name,
         "mid": mid_var,
-        "cat": cat_var,
     })
     conn.commit()
     
     mission_id = mid_var.getvalue()[0]
-    created_at = cat_var.getvalue()[0]
     cursor.close()
     
-    return {
-        "mission_id": mission_id,
-        "mission_name": mission.mission_name,
-        "launch_date": mission.launch_date,
-        "end_date": mission.end_date,
-        "status": mission.status.value,
-        "objective": mission.objective,
-        "budget": mission.budget,
-        "lead_agency": mission.lead_agency,
-        "created_at": created_at,
-        "satellite_count": 0,
-    }
+    return await get_mission(mission_id, conn, current_user)
+
 
 @router.put("/{mission_id}", response_model=MissionResponse)
 async def update_mission(
@@ -135,7 +136,7 @@ async def update_mission(
     cursor = conn.cursor()
     
     # Check exists
-    cursor.execute("SELECT 1 FROM MISSIONS WHERE mission_id = :id", {"id": mission_id})
+    cursor.execute("SELECT 1 FROM MISSION WHERE mission_id = :id", {"id": mission_id})
     if not cursor.fetchone():
         cursor.close()
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -147,36 +148,33 @@ async def update_mission(
     if mission.mission_name is not None:
         updates.append("mission_name = :name")
         params["name"] = mission.mission_name
+    if mission.mission_type is not None:
+        updates.append("mission_type = :mtype")
+        params["mtype"] = mission.mission_type
     if mission.launch_date is not None:
         updates.append("launch_date = :launch")
         params["launch"] = mission.launch_date
-    if mission.end_date is not None:
-        updates.append("end_date = :end")
-        params["end"] = mission.end_date
     if mission.status is not None:
         updates.append("status = :status")
-        params["status"] = mission.status.value
+        params["status"] = mission.status
     if mission.objective is not None:
         updates.append("objective = :obj")
         params["obj"] = mission.objective
-    if mission.budget is not None:
-        updates.append("budget = :budget")
-        params["budget"] = mission.budget
-    if mission.lead_agency is not None:
-        updates.append("lead_agency = :agency")
-        params["agency"] = mission.lead_agency
+    if mission.agency_name is not None:
+        updates.append("agency_name = :agency")
+        params["agency"] = mission.agency_name
     
     if not updates:
         cursor.close()
         raise HTTPException(status_code=400, detail="No fields to update")
     
-    updates.append("updated_at = CURRENT_TIMESTAMP")
-    sql = f"UPDATE MISSIONS SET {', '.join(updates)} WHERE mission_id = :id"
+    sql = f"UPDATE MISSION SET {', '.join(updates)} WHERE mission_id = :id"
     cursor.execute(sql, params)
     conn.commit()
     cursor.close()
     
     return await get_mission(mission_id, conn, current_user)
+
 
 @router.delete("/{mission_id}")
 async def delete_mission(
@@ -185,7 +183,7 @@ async def delete_mission(
     current_user: dict = Depends(require_role([UserRole.ADMIN])),
 ):
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM MISSIONS WHERE mission_id = :id", {"id": mission_id})
+    cursor.execute("DELETE FROM MISSION WHERE mission_id = :id", {"id": mission_id})
     if cursor.rowcount == 0:
         cursor.close()
         raise HTTPException(status_code=404, detail="Mission not found")

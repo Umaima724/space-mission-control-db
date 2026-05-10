@@ -11,23 +11,20 @@ class MissionStatus(str, Enum):
     COMPLETED = "COMPLETED"
     ABORTED = "ABORTED"
 
+class MissionType(str, Enum):
+    CREWED = "CREWED"
+    UNCREWED = "UNCREWED"
+
 class SatelliteStatus(str, Enum):
-    OPERATIONAL = "OPERATIONAL"
-    DEGRADED = "DEGRADED"
-    OFFLINE = "OFFLINE"
-    MAINTENANCE = "MAINTENANCE"
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    DECOMMISSIONED = "DECOMMISSIONED"
 
 class AnomalySeverity(str, Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
-
-class AnomalyStatus(str, Enum):
-    OPEN = "OPEN"
-    INVESTIGATING = "INVESTIGATING"
-    RESOLVED = "RESOLVED"
-    CLOSED = "CLOSED"
 
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
@@ -51,30 +48,26 @@ class TokenData(BaseModel):
 
 # ==================== MISSION MODELS ====================
 class MissionBase(BaseModel):
-    mission_name: str = Field(..., max_length=100)
-    launch_date: Optional[date] = None
-    end_date: Optional[date] = None
+    mission_name: str = Field(..., max_length=150)
+    mission_type: MissionType = MissionType.UNCREWED
+    launch_date: date
     status: MissionStatus = MissionStatus.PLANNED
-    objective: Optional[str] = None
-    budget: Optional[float] = None
-    lead_agency: Optional[str] = Field(None, max_length=100)
+    objective: str = Field(..., max_length=500)
+    agency_name: str = Field(..., max_length=100)
 
 class MissionCreate(MissionBase):
     pass
 
 class MissionUpdate(BaseModel):
-    mission_name: Optional[str] = Field(None, max_length=100)
+    mission_name: Optional[str] = Field(None, max_length=150)
+    mission_type: Optional[MissionType] = None
     launch_date: Optional[date] = None
-    end_date: Optional[date] = None
     status: Optional[MissionStatus] = None
     objective: Optional[str] = None
-    budget: Optional[float] = None
-    lead_agency: Optional[str] = Field(None, max_length=100)
+    agency_name: Optional[str] = Field(None, max_length=100)
 
 class MissionResponse(MissionBase):
     mission_id: int
-    created_at: datetime
-    updated_at: Optional[datetime] = None
     satellite_count: Optional[int] = 0
 
     class Config:
@@ -83,31 +76,27 @@ class MissionResponse(MissionBase):
 # ==================== SATELLITE MODELS ====================
 class SatelliteBase(BaseModel):
     satellite_name: str = Field(..., max_length=100)
-    norad_id: Optional[str] = Field(None, max_length=20)
-    mission_id: Optional[int] = None
-    launch_date: Optional[date] = None
-    orbit_type: Optional[str] = Field(None, max_length=50)
-    altitude_km: Optional[float] = None
-    status: SatelliteStatus = SatelliteStatus.OPERATIONAL
-    health_score: Optional[float] = Field(None, ge=0, le=100)
+    mission_id: int
+    orbit_id: Optional[int] = None
+    mass_kg: float = Field(..., gt=0)
+    frequency_mhz: float = Field(..., gt=0)
+    status: SatelliteStatus = SatelliteStatus.ACTIVE
+    launch_date: date
 
 class SatelliteCreate(SatelliteBase):
     pass
 
 class SatelliteUpdate(BaseModel):
     satellite_name: Optional[str] = Field(None, max_length=100)
-    norad_id: Optional[str] = Field(None, max_length=20)
     mission_id: Optional[int] = None
-    launch_date: Optional[date] = None
-    orbit_type: Optional[str] = Field(None, max_length=50)
-    altitude_km: Optional[float] = None
+    orbit_id: Optional[int] = None
+    mass_kg: Optional[float] = Field(None, gt=0)
+    frequency_mhz: Optional[float] = Field(None, gt=0)
     status: Optional[SatelliteStatus] = None
-    health_score: Optional[float] = Field(None, ge=0, le=100)
+    launch_date: Optional[date] = None
 
 class SatelliteResponse(SatelliteBase):
     satellite_id: int
-    last_contact: Optional[datetime] = None
-    created_at: datetime
     mission_name: Optional[str] = None
 
     class Config:
@@ -116,38 +105,37 @@ class SatelliteResponse(SatelliteBase):
 # ==================== TELEMETRY MODELS ====================
 class TelemetryBase(BaseModel):
     satellite_id: int
-    timestamp: datetime
-    parameter_name: str = Field(..., max_length=50)
-    parameter_value: float
-    unit: Optional[str] = Field(None, max_length=20)
-    data_source: Optional[str] = Field(None, max_length=50)
+    recorded_at: datetime
+    temperature_c: float
+    battery_pct: Optional[float] = Field(None, ge=0, le=100)
+    signal_dbm: Optional[float] = Field(None, ge=-150, le=0)
+    altitude_km: float
 
 class TelemetryCreate(TelemetryBase):
     pass
 
 class TelemetryResponse(TelemetryBase):
-    telemetry_id: int
+    log_id: int
     satellite_name: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 class TelemetryStats(BaseModel):
-    parameter_name: str
-    avg_value: float
-    min_value: float
-    max_value: float
-    count: int
+    temperature: dict
+    battery: dict
+    signal: dict
+    altitude: dict
 
 # ==================== ANOMALY MODELS ====================
 class AnomalyBase(BaseModel):
     satellite_id: int
-    detected_at: datetime
+    reported_by: int
     severity: AnomalySeverity
-    description: str
-    status: AnomalyStatus = AnomalyStatus.OPEN
-    resolved_at: Optional[datetime] = None
-    resolved_by: Optional[str] = None
+    description: str = Field(..., max_length=1000)
+    reported_at: Optional[datetime] = None
+    resolved: str = 'N'  # 'Y' or 'N'
+    resolution_note: Optional[str] = Field(None, max_length=500)
 
 class AnomalyCreate(AnomalyBase):
     pass
@@ -155,43 +143,40 @@ class AnomalyCreate(AnomalyBase):
 class AnomalyUpdate(BaseModel):
     severity: Optional[AnomalySeverity] = None
     description: Optional[str] = None
-    status: Optional[AnomalyStatus] = None
-    resolved_at: Optional[datetime] = None
-    resolved_by: Optional[str] = None
+    resolved: Optional[str] = None
+    resolution_note: Optional[str] = None
 
 class AnomalyResponse(AnomalyBase):
     anomaly_id: int
     satellite_name: Optional[str] = None
-    created_at: datetime
 
     class Config:
         from_attributes = True
 
 # ==================== GROUND STATION MODELS ====================
 class GroundStationBase(BaseModel):
+    center_id: Optional[int] = None
     station_name: str = Field(..., max_length=100)
-    location: Optional[str] = Field(None, max_length=200)
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    elevation_m: Optional[float] = None
-    status: Optional[str] = Field(None, max_length=20)
-    antenna_count: Optional[int] = None
+    location: str = Field(..., max_length=150)
+    latitude: float
+    longitude: float
+    operational: str = 'Y'  # 'Y' or 'N'
+    frequency_range: str = Field(..., max_length=50)
 
 class GroundStationCreate(GroundStationBase):
     pass
 
 class GroundStationUpdate(BaseModel):
+    center_id: Optional[int] = None
     station_name: Optional[str] = Field(None, max_length=100)
-    location: Optional[str] = Field(None, max_length=200)
+    location: Optional[str] = Field(None, max_length=150)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    elevation_m: Optional[float] = None
-    status: Optional[str] = Field(None, max_length=20)
-    antenna_count: Optional[int] = None
+    operational: Optional[str] = None
+    frequency_range: Optional[str] = Field(None, max_length=50)
 
 class GroundStationResponse(GroundStationBase):
     station_id: int
-    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -214,8 +199,8 @@ class DashboardData(BaseModel):
 
 # ==================== REPORT MODELS ====================
 class ReportRequest(BaseModel):
-    report_type: str  # MISSIONS, SATELLITES, TELEMETRY, ANOMALIES
-    format: str = "pdf"  # pdf, csv, xlsx
+    report_type: str  # MISSIONS, SATELLITES, TELEMETRY, ANOMALY_REPORT
+    format: str = "pdf"  # pdf, csv
     date_from: Optional[date] = None
     date_to: Optional[date] = None
     filters: Optional[dict] = None

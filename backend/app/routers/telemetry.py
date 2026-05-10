@@ -8,12 +8,12 @@ from ..routers.auth import get_current_user, require_role, UserRole
 
 router = APIRouter(prefix="/telemetry", tags=["Telemetry"])
 
+
 @router.get("", response_model=PaginatedResponse)
 async def list_telemetry(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     satellite_id: Optional[int] = None,
-    parameter: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     conn: oracledb.Connection = Depends(get_db_dependency),
@@ -26,32 +26,36 @@ async def list_telemetry(
     if satellite_id:
         conditions.append("t.satellite_id = :sid")
         params.append(satellite_id)
-    if parameter:
-        conditions.append("t.parameter_name = :param")
-        params.append(parameter)
     if date_from:
-        conditions.append("t.timestamp >= TO_TIMESTAMP(:from_date, 'YYYY-MM-DD\"T\"HH24:MI:SS')")
+        conditions.append("t.recorded_at >= TO_TIMESTAMP(:from_date, 'YYYY-MM-DD\"T\"HH24:MI:SS')")
         params.append(date_from)
     if date_to:
-        conditions.append("t.timestamp <= TO_TIMESTAMP(:to_date, 'YYYY-MM-DD\"T\"HH24:MI:SS')")
+        conditions.append("t.recorded_at <= TO_TIMESTAMP(:to_date, 'YYYY-MM-DD\"T\"HH24:MI:SS')")
         params.append(date_to)
     
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
     
-    count_sql = f"SELECT COUNT(*) FROM TELEMETRY t {where_clause}"
+    count_sql = f"SELECT COUNT(*) FROM TELEMETRY_LOG t {where_clause}"
     cursor.execute(count_sql, params)
     total = cursor.fetchone()[0]
     
+    # Oracle 11g pagination with ROWNUM
     offset = (page - 1) * page_size
+    end_row = offset + page_size
+    
     sql = f"""
-        SELECT t.*, s.satellite_name
-        FROM TELEMETRY t
-        JOIN SATELLITES s ON t.satellite_id = s.satellite_id
-        {where_clause}
-        ORDER BY t.timestamp DESC
-        OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
+        SELECT * FROM (
+            SELECT a.*, ROWNUM rn FROM (
+                SELECT t.log_id, t.satellite_id, t.recorded_at, t.temperature_c,
+                       t.battery_pct, t.signal_dbm, t.altitude_km, s.satellite_name
+                FROM TELEMETRY_LOG t
+                JOIN SATELLITE s ON t.satellite_id = s.satellite_id
+                {where_clause}
+                ORDER BY t.recorded_at DESC
+            ) a WHERE ROWNUM <= :end_row
+        ) WHERE rn > :offset
     """
-    cursor.execute(sql, params + [offset, page_size])
+    cursor.execute(sql, params + [end_row, offset])
     
     columns = [col[0].lower() for col in cursor.description]
     items = [dict(zip(columns, row)) for row in cursor]
@@ -62,6 +66,7 @@ async def list_telemetry(
         page_size=page_size, total_pages=(total + page_size - 1) // page_size,
     )
 
+
 @router.get("/stats")
 async def get_telemetry_stats(
     satellite_id: int,
@@ -70,30 +75,55 @@ async def get_telemetry_stats(
     current_user: dict = Depends(get_current_user),
 ):
     cursor = conn.cursor()
+    
+    # FIXED: Use NUMTODSINTERVAL instead of INTERVAL with bind variable
     sql = """
-        SELECT parameter_name,
-               ROUND(AVG(parameter_value), 4) as avg_value,
-               MIN(parameter_value) as min_value,
-               MAX(parameter_value) as max_value,
-               COUNT(*) as count
-        FROM TELEMETRY
+        SELECT 
+            ROUND(AVG(temperature_c), 4) as avg_temp,
+            MIN(temperature_c) as min_temp,
+            MAX(temperature_c) as max_temp,
+            ROUND(AVG(battery_pct), 4) as avg_battery,
+            MIN(battery_pct) as min_battery,
+            MAX(battery_pct) as max_battery,
+            ROUND(AVG(signal_dbm), 4) as avg_signal,
+            MIN(signal_dbm) as min_signal,
+            MAX(signal_dbm) as max_signal,
+            ROUND(AVG(altitude_km), 4) as avg_altitude,
+            MIN(altitude_km) as min_altitude,
+            MAX(altitude_km) as max_altitude,
+            COUNT(*) as count
+        FROM TELEMETRY_LOG
         WHERE satellite_id = :sid
-        AND timestamp >= SYSTIMESTAMP - INTERVAL ':hours' HOUR
-        GROUP BY parameter_name
+        AND recorded_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:hours, 'HOUR')
     """
     cursor.execute(sql, {"sid": satellite_id, "hours": hours})
     
-    stats = []
-    for row in cursor:
-        stats.append({
-            "parameter_name": row[0],
-            "avg_value": row[1],
-            "min_value": row[2],
-            "max_value": row[3],
-            "count": row[4],
-        })
+    row = cursor.fetchone()
     cursor.close()
-    return stats
+    
+    if not row or row[12] == 0:
+        return {
+            "temperature": {"avg": None, "min": None, "max": None, "count": 0},
+            "battery": {"avg": None, "min": None, "max": None, "count": 0},
+            "signal": {"avg": None, "min": None, "max": None, "count": 0},
+            "altitude": {"avg": None, "min": None, "max": None, "count": 0},
+        }
+    
+    return {
+        "temperature": {
+            "avg": row[0], "min": row[1], "max": row[2], "count": row[12]
+        },
+        "battery": {
+            "avg": row[3], "min": row[4], "max": row[5], "count": row[12]
+        },
+        "signal": {
+            "avg": row[6], "min": row[7], "max": row[8], "count": row[12]
+        },
+        "altitude": {
+            "avg": row[9], "min": row[10], "max": row[11], "count": row[12]
+        },
+    }
+
 
 @router.post("", response_model=TelemetryResponse, status_code=201)
 async def create_telemetry(
@@ -104,39 +134,42 @@ async def create_telemetry(
     cursor = conn.cursor()
     
     # Verify satellite exists
-    cursor.execute("SELECT 1 FROM SATELLITES WHERE satellite_id = :id", {"id": telemetry.satellite_id})
-    if not cursor.fetchone():
+    cursor.execute("SELECT satellite_name FROM SATELLITE WHERE satellite_id = :id", {"id": telemetry.satellite_id})
+    sat_row = cursor.fetchone()
+    if not sat_row:
         cursor.close()
         raise HTTPException(status_code=404, detail="Satellite not found")
     
+    satellite_name = sat_row[0]
+    
     sql = """
-        INSERT INTO TELEMETRY (telemetry_id, satellite_id, timestamp, parameter_name, parameter_value, unit, data_source)
-        VALUES (TELEMETRY_SEQ.NEXTVAL, :sid, :ts, :param, :val, :unit, :source)
-        RETURNING telemetry_id INTO :tid
+        INSERT INTO TELEMETRY_LOG (log_id, satellite_id, recorded_at, temperature_c, battery_pct, signal_dbm, altitude_km)
+        VALUES (SEQ_TELEMETRY_ID.NEXTVAL, :sid, :rec_at, :temp, :battery, :signal, :altitude)
+        RETURNING log_id INTO :lid
     """
-    tid_var = cursor.var(oracledb.DB_TYPE_NUMBER)
+    lid_var = cursor.var(oracledb.DB_TYPE_NUMBER)
     
     cursor.execute(sql, {
         "sid": telemetry.satellite_id,
-        "ts": telemetry.timestamp,
-        "param": telemetry.parameter_name,
-        "val": telemetry.parameter_value,
-        "unit": telemetry.unit,
-        "source": telemetry.data_source,
-        "tid": tid_var,
+        "rec_at": telemetry.recorded_at,
+        "temp": telemetry.temperature_c,
+        "battery": telemetry.battery_pct,
+        "signal": telemetry.signal_dbm,
+        "altitude": telemetry.altitude_km,
+        "lid": lid_var,
     })
     conn.commit()
     
-    telemetry_id = tid_var.getvalue()[0]
+    log_id = lid_var.getvalue()[0]
     cursor.close()
     
     return {
-        "telemetry_id": telemetry_id,
+        "log_id": log_id,
         "satellite_id": telemetry.satellite_id,
-        "timestamp": telemetry.timestamp,
-        "parameter_name": telemetry.parameter_name,
-        "parameter_value": telemetry.parameter_value,
-        "unit": telemetry.unit,
-        "data_source": telemetry.data_source,
-        "satellite_name": None,
+        "recorded_at": telemetry.recorded_at,
+        "temperature_c": telemetry.temperature_c,
+        "battery_pct": telemetry.battery_pct,
+        "signal_dbm": telemetry.signal_dbm,
+        "altitude_km": telemetry.altitude_km,
+        "satellite_name": satellite_name,
     }

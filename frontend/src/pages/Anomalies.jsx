@@ -1,18 +1,18 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import DataGrid from '../components/DataGrid'
 import SearchFilter from '../components/SearchFilter'
 import ExportButton from '../components/ExportButton'
-import { useApi } from '../hooks/useApi'
+import api from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 
 const anomalyColumns = [
   { key: 'satellite_name', label: 'Satellite' },
-  { key: 'detected_at', label: 'Detected', type: 'date' },
+  { key: 'reported_at', label: 'Reported', type: 'date' },
   { key: 'severity', label: 'Severity', type: 'status' },
   { key: 'description', label: 'Description' },
-  { key: 'status', label: 'Status', type: 'status' },
-  { key: 'resolved_at', label: 'Resolved', type: 'date' },
+  { key: 'resolved', label: 'Resolved', type: 'status' },
+  { key: 'resolution_note', label: 'Resolution Note' },
 ]
 
 const severityFilters = [
@@ -22,67 +22,77 @@ const severityFilters = [
   { value: 'CRITICAL', label: 'Critical' },
 ]
 
-const statusFilters = [
-  { value: 'OPEN', label: 'Open' },
-  { value: 'INVESTIGATING', label: 'Investigating' },
-  { value: 'RESOLVED', label: 'Resolved' },
-  { value: 'CLOSED', label: 'Closed' },
+const resolvedFilters = [
+  { value: 'N', label: 'Open' },
+  { value: 'Y', label: 'Resolved' },
 ]
 
 export default function Anomalies() {
   const [anomalies, setAnomalies] = useState([])
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
-  const [search, setSearch] = useState('')
   const [filters, setFilters] = useState({})
   const [showModal, setShowModal] = useState(false)
   const [editingAnomaly, setEditingAnomaly] = useState(null)
-  const { get, post, put, del, loading } = useApi()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const { hasRole } = useAuth()
 
-  const fetchAnomalies = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+
     const params = new URLSearchParams()
     params.append('page', page)
     params.append('page_size', 10)
     if (filters.severity) params.append('severity', filters.severity)
-    if (filters.status) params.append('status', filters.status)
+    if (filters.resolved) params.append('resolved', filters.resolved)
 
-    const data = await get(`/anomalies?${params}`)
-    setAnomalies(data.items || [])
-    setTotal(data.total || 0)
-  }, [page, filters, get])
+    api.get(`/anomalies?${params}`)
+      .then(res => {
+        if (!cancelled) {
+          setAnomalies(res.data.items || [])
+          setTotal(res.data.total || 0)
+        }
+      })
+      .catch(err => {
+        if (!cancelled) setError(err.response?.data?.detail || 'Failed to load anomalies')
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
 
-  useEffect(() => {
-    fetchAnomalies()
-  }, [fetchAnomalies])
+    return () => { cancelled = true }
+  }, [page, filters])
 
   const handleSave = async (e) => {
     e.preventDefault()
     const formData = new FormData(e.target)
     const payload = Object.fromEntries(formData)
     payload.satellite_id = parseInt(payload.satellite_id)
+    payload.reported_by = parseInt(payload.reported_by)
 
     try {
       if (editingAnomaly) {
-        await put(`/anomalies/${editingAnomaly.anomaly_id}`, payload)
+        await api.put(`/anomalies/${editingAnomaly.anomaly_id}`, payload)
       } else {
-        await post('/anomalies', payload)
+        await api.post('/anomalies', payload)
       }
       setShowModal(false)
       setEditingAnomaly(null)
-      fetchAnomalies()
-    } catch {
-      // handled
+      // Trigger re-fetch by bumping page or using a refresh flag
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save anomaly')
     }
   }
 
   const handleDelete = async (anomaly) => {
     if (!confirm('Delete this anomaly?')) return
     try {
-      await del(`/anomalies/${anomaly.anomaly_id}`)
-      fetchAnomalies()
-    } catch {
-      // handled
+      await api.delete(`/anomalies/${anomaly.anomaly_id}`)
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to delete anomaly')
     }
   }
 
@@ -94,7 +104,7 @@ export default function Anomalies() {
           <p className="text-space-400 mt-1">Track and resolve anomalies</p>
         </div>
         <div className="flex items-center gap-3">
-          <ExportButton reportType="ANOMALIES" />
+          <ExportButton reportType="ANOMALY_REPORT" />
           {hasRole(['ADMIN', 'OPERATOR']) && (
             <button onClick={() => { setEditingAnomaly(null); setShowModal(true) }} className="btn-primary flex items-center gap-2">
               <Plus className="w-4 h-4" />
@@ -104,12 +114,18 @@ export default function Anomalies() {
         </div>
       </div>
 
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
+
       <SearchFilter
-        onSearch={setSearch}
+        onSearch={() => {}}
         onFilter={setFilters}
         filters={[
           { key: 'severity', label: 'Severity', options: severityFilters },
-          { key: 'status', label: 'Status', options: statusFilters },
+          { key: 'resolved', label: 'Status', options: resolvedFilters },
         ]}
         placeholder="Search anomalies..."
       />
@@ -143,8 +159,12 @@ export default function Anomalies() {
                 <input name="satellite_id" type="number" defaultValue={editingAnomaly?.satellite_id} className="input-field" required />
               </div>
               <div>
-                <label className="block text-sm font-medium text-space-700 mb-1">Detected At *</label>
-                <input name="detected_at" type="datetime-local" defaultValue={editingAnomaly?.detected_at?.slice(0, 16)} className="input-field" required />
+                <label className="block text-sm font-medium text-space-700 mb-1">Reported By (Operator ID) *</label>
+                <input name="reported_by" type="number" defaultValue={editingAnomaly?.reported_by} className="input-field" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Reported At</label>
+                <input name="reported_at" type="datetime-local" defaultValue={editingAnomaly?.reported_at?.slice(0, 16)} className="input-field" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -157,18 +177,20 @@ export default function Anomalies() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Status</label>
-                  <select name="status" defaultValue={editingAnomaly?.status || 'OPEN'} className="input-field">
-                    <option value="OPEN">Open</option>
-                    <option value="INVESTIGATING">Investigating</option>
-                    <option value="RESOLVED">Resolved</option>
-                    <option value="CLOSED">Closed</option>
+                  <label className="block text-sm font-medium text-space-700 mb-1">Resolved</label>
+                  <select name="resolved" defaultValue={editingAnomaly?.resolved || 'N'} className="input-field">
+                    <option value="N">No</option>
+                    <option value="Y">Yes</option>
                   </select>
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-space-700 mb-1">Description *</label>
                 <textarea name="description" defaultValue={editingAnomaly?.description} rows={3} className="input-field" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Resolution Note</label>
+                <textarea name="resolution_note" defaultValue={editingAnomaly?.resolution_note} rows={2} className="input-field" />
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>

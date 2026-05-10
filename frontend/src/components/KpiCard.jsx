@@ -1,10 +1,18 @@
-import { TrendingUp, TrendingDown } from 'lucide-react'
+import { 
+  Rocket, 
+  Satellite, 
+  AlertTriangle, 
+  Radio, 
+  Activity,
+  TrendingUp, 
+  TrendingDown 
+} from 'lucide-react'
 
 const iconMap = {
-  Rocket: require('lucide-react').Rocket,
-  Satellite: require('lucide-react').Satellite,
-  AlertTriangle: require('lucide-react').AlertTriangle,
-  Radio: require('lucide-react').Radio,
+  Rocket: Rocket,
+  Satellite: Satellite,
+  AlertTriangle: AlertTriangle,
+  Radio: Radio,
 }
 
 const colorMap = {
@@ -16,7 +24,7 @@ const colorMap = {
 }
 
 export default function KpiCard({ title, value, change, icon, color }) {
-  const Icon = iconMap[icon] || require('lucide-react').Activity
+  const Icon = iconMap[icon] || Activity
   const colorClass = colorMap[color] || colorMap.blue
 
   return (

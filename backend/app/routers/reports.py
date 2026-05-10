@@ -15,6 +15,7 @@ from ..routers.auth import get_current_user, require_role, UserRole
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
+
 @router.post("/generate")
 async def generate_report(
     request: ReportRequest,
@@ -25,38 +26,50 @@ async def generate_report(
     
     # Determine query based on report type
     if request.report_type == "MISSIONS":
-        sql = "SELECT * FROM MISSIONS ORDER BY created_at DESC"
-        headers = ["ID", "Name", "Launch", "End", "Status", "Objective", "Budget", "Agency", "Created"]
+        sql = """
+            SELECT mission_id, mission_name, mission_type, launch_date, status, 
+                   objective, agency_name
+            FROM MISSION 
+            ORDER BY launch_date DESC
+        """
+        headers = ["ID", "Name", "Type", "Launch Date", "Status", "Objective", "Agency"]
+        
     elif request.report_type == "SATELLITES":
         sql = """
-            SELECT s.*, m.mission_name 
-            FROM SATELLITES s 
-            LEFT JOIN MISSIONS m ON s.mission_id = m.mission_id 
-            ORDER BY s.created_at DESC
+            SELECT s.satellite_id, s.satellite_name, s.mass_kg, s.frequency_mhz,
+                   s.status, s.launch_date, m.mission_name 
+            FROM SATELLITE s 
+            LEFT JOIN MISSION m ON s.mission_id = m.mission_id 
+            ORDER BY s.launch_date DESC
         """
-        headers = ["ID", "Name", "NORAD", "Mission", "Launch", "Orbit", "Altitude", "Status", "Health", "Created"]
+        headers = ["ID", "Name", "Mass (kg)", "Frequency (MHz)", "Status", "Launch Date", "Mission"]
+        
     elif request.report_type == "TELEMETRY":
         sql = """
-            SELECT t.*, s.satellite_name 
-            FROM TELEMETRY t 
-            JOIN SATELLITES s ON t.satellite_id = s.satellite_id 
-            ORDER BY t.timestamp DESC
+            SELECT t.log_id, s.satellite_name, t.recorded_at, t.temperature_c,
+                   t.battery_pct, t.signal_dbm, t.altitude_km
+            FROM TELEMETRY_LOG t 
+            JOIN SATELLITE s ON t.satellite_id = s.satellite_id 
+            ORDER BY t.recorded_at DESC
         """
-        headers = ["ID", "Satellite", "Timestamp", "Parameter", "Value", "Unit", "Source"]
-    elif request.report_type == "ANOMALIES":
+        headers = ["Log ID", "Satellite", "Recorded At", "Temp (°C)", "Battery (%)", "Signal (dBm)", "Altitude (km)"]
+        
+    elif request.report_type == "ANOMALY_REPORT":
         sql = """
-            SELECT a.*, s.satellite_name 
-            FROM ANOMALIES a 
-            JOIN SATELLITES s ON a.satellite_id = s.satellite_id 
-            ORDER BY a.detected_at DESC
+            SELECT a.anomaly_id, s.satellite_name, a.reported_at, a.severity,
+                   a.description, a.resolved, a.resolution_note, o.full_name as reported_by
+            FROM ANOMALY_REPORT a 
+            JOIN SATELLITE s ON a.satellite_id = s.satellite_id 
+            LEFT JOIN OPERATOR o ON a.reported_by = o.operator_id
+            ORDER BY a.reported_at DESC
         """
-        headers = ["ID", "Satellite", "Detected", "Severity", "Description", "Status", "Resolved", "By"]
+        headers = ["ID", "Satellite", "Reported At", "Severity", "Description", "Resolved", "Resolution Note", "Reported By"]
+        
     else:
         raise HTTPException(status_code=400, detail="Invalid report type")
     
     cursor.execute(sql)
     rows = cursor.fetchall()
-    columns = [col[0] for col in cursor.description]
     cursor.close()
     
     if request.format == "csv":
@@ -74,7 +87,12 @@ async def generate_report(
     
     elif request.format == "pdf":
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), topMargin=0.5*inch, bottomMargin=0.5*inch)
+        doc = SimpleDocTemplate(
+            buffer, 
+            pagesize=landscape(letter), 
+            topMargin=0.5*inch, 
+            bottomMargin=0.5*inch
+        )
         elements = []
         
         styles = getSampleStyleSheet()

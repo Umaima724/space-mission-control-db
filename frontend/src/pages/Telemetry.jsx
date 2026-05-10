@@ -1,17 +1,17 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import DataGrid from '../components/DataGrid'
 import SearchFilter from '../components/SearchFilter'
-import { useApi } from '../hooks/useApi'
+import api from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 
 const telemetryColumns = [
   { key: 'satellite_name', label: 'Satellite' },
-  { key: 'timestamp', label: 'Timestamp', type: 'date' },
-  { key: 'parameter_name', label: 'Parameter' },
-  { key: 'parameter_value', label: 'Value' },
-  { key: 'unit', label: 'Unit' },
-  { key: 'data_source', label: 'Source' },
+  { key: 'recorded_at', label: 'Recorded At', type: 'date' },
+  { key: 'temperature_c', label: 'Temperature (°C)' },
+  { key: 'battery_pct', label: 'Battery (%)' },
+  { key: 'signal_dbm', label: 'Signal (dBm)' },
+  { key: 'altitude_km', label: 'Altitude (km)' },
 ]
 
 export default function Telemetry() {
@@ -21,38 +21,53 @@ export default function Telemetry() {
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState({})
   const [showModal, setShowModal] = useState(false)
-  const { get, post, loading } = useApi()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const { hasRole } = useAuth()
 
-  const fetchTelemetry = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+
     const params = new URLSearchParams()
     params.append('page', page)
     params.append('page_size', 50)
-    if (search) params.append('search', search)
     if (filters.satellite_id) params.append('satellite_id', filters.satellite_id)
+    if (filters.date_from) params.append('date_from', filters.date_from)
+    if (filters.date_to) params.append('date_to', filters.date_to)
 
-    const data = await get(`/telemetry?${params}`)
-    setTelemetry(data.items || [])
-    setTotal(data.total || 0)
-  }, [page, search, filters, get])
+    api.get(`/telemetry?${params}`)
+      .then(res => {
+        if (!cancelled) {
+          setTelemetry(res.data.items || [])
+          setTotal(res.data.total || 0)
+        }
+      })
+      .catch(err => {
+        if (!cancelled) setError(err.response?.data?.detail || 'Failed to load telemetry')
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
 
-  useEffect(() => {
-    fetchTelemetry()
-  }, [fetchTelemetry])
+    return () => { cancelled = true }
+  }, [page, filters])
 
   const handleSave = async (e) => {
     e.preventDefault()
     const formData = new FormData(e.target)
     const payload = Object.fromEntries(formData)
     payload.satellite_id = parseInt(payload.satellite_id)
-    payload.parameter_value = parseFloat(payload.parameter_value)
+    payload.temperature_c = parseFloat(payload.temperature_c)
+    if (payload.battery_pct) payload.battery_pct = parseFloat(payload.battery_pct)
+    if (payload.signal_dbm) payload.signal_dbm = parseFloat(payload.signal_dbm)
+    payload.altitude_km = parseFloat(payload.altitude_km)
 
     try {
-      await post('/telemetry', payload)
+      await api.post('/telemetry', payload)
       setShowModal(false)
-      fetchTelemetry()
-    } catch {
-      // handled by useApi
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to add telemetry')
     }
   }
 
@@ -70,6 +85,12 @@ export default function Telemetry() {
           </button>
         )}
       </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
 
       <SearchFilter
         onSearch={setSearch}
@@ -102,26 +123,26 @@ export default function Telemetry() {
                 <input name="satellite_id" type="number" className="input-field" required />
               </div>
               <div>
-                <label className="block text-sm font-medium text-space-700 mb-1">Timestamp *</label>
-                <input name="timestamp" type="datetime-local" className="input-field" required />
+                <label className="block text-sm font-medium text-space-700 mb-1">Recorded At *</label>
+                <input name="recorded_at" type="datetime-local" className="input-field" required />
               </div>
               <div>
-                <label className="block text-sm font-medium text-space-700 mb-1">Parameter Name *</label>
-                <input name="parameter_name" className="input-field" required />
+                <label className="block text-sm font-medium text-space-700 mb-1">Temperature (°C) *</label>
+                <input name="temperature_c" type="number" step="0.01" className="input-field" required />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Value *</label>
-                  <input name="parameter_value" type="number" step="any" className="input-field" required />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Battery (%)</label>
+                  <input name="battery_pct" type="number" min="0" max="100" step="0.01" className="input-field" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Unit</label>
-                  <input name="unit" className="input-field" />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Signal (dBm)</label>
+                  <input name="signal_dbm" type="number" min="-150" max="0" step="0.01" className="input-field" />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-space-700 mb-1">Data Source</label>
-                <input name="data_source" className="input-field" />
+                <label className="block text-sm font-medium text-space-700 mb-1">Altitude (km) *</label>
+                <input name="altitude_km" type="number" step="0.01" className="input-field" required />
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>

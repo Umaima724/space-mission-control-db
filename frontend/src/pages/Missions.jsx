@@ -1,18 +1,18 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import DataGrid from '../components/DataGrid'
 import SearchFilter from '../components/SearchFilter'
 import ExportButton from '../components/ExportButton'
-import { useApi } from '../hooks/useApi'
+import api from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 
 const missionColumns = [
   { key: 'mission_name', label: 'Mission Name' },
+  { key: 'mission_type', label: 'Type' },
   { key: 'status', label: 'Status', type: 'status' },
   { key: 'launch_date', label: 'Launch Date', type: 'date' },
-  { key: 'end_date', label: 'End Date', type: 'date' },
-  { key: 'budget', label: 'Budget', type: 'money' },
-  { key: 'lead_agency', label: 'Agency' },
+  { key: 'objective', label: 'Objective' },
+  { key: 'agency_name', label: 'Agency' },
   { key: 'satellite_count', label: 'Satellites' },
 ]
 
@@ -23,6 +23,11 @@ const statusFilters = [
   { value: 'ABORTED', label: 'Aborted' },
 ]
 
+const typeFilters = [
+  { value: 'CREWED', label: 'Crewed' },
+  { value: 'UNCREWED', label: 'Uncrewed' },
+]
+
 export default function Missions() {
   const [missions, setMissions] = useState([])
   const [page, setPage] = useState(1)
@@ -31,52 +36,63 @@ export default function Missions() {
   const [filters, setFilters] = useState({})
   const [showModal, setShowModal] = useState(false)
   const [editingMission, setEditingMission] = useState(null)
-  const { get, post, put, del, loading } = useApi()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const { hasRole } = useAuth()
 
-  const fetchMissions = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+
     const params = new URLSearchParams()
     params.append('page', page)
     params.append('page_size', 10)
     if (search) params.append('search', search)
     if (filters.status) params.append('status', filters.status)
+    if (filters.mission_type) params.append('mission_type', filters.mission_type)
 
-    const data = await get(`/missions?${params}`)
-    setMissions(data.items || [])
-    setTotal(data.total || 0)
-  }, [page, search, filters, get])
+    api.get(`/missions?${params}`)
+      .then(res => {
+        if (!cancelled) {
+          setMissions(res.data.items || [])
+          setTotal(res.data.total || 0)
+        }
+      })
+      .catch(err => {
+        if (!cancelled) setError(err.response?.data?.detail || 'Failed to load missions')
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
 
-  useEffect(() => {
-    fetchMissions()
-  }, [fetchMissions])
+    return () => { cancelled = true }
+  }, [page, search, filters])
 
   const handleSave = async (e) => {
     e.preventDefault()
     const formData = new FormData(e.target)
     const payload = Object.fromEntries(formData)
-    if (payload.budget) payload.budget = parseFloat(payload.budget)
 
     try {
       if (editingMission) {
-        await put(`/missions/${editingMission.mission_id}`, payload)
+        await api.put(`/missions/${editingMission.mission_id}`, payload)
       } else {
-        await post('/missions', payload)
+        await api.post('/missions', payload)
       }
       setShowModal(false)
       setEditingMission(null)
-      fetchMissions()
-    } catch {
-      // error handled by useApi
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save mission')
     }
   }
 
   const handleDelete = async (mission) => {
     if (!confirm('Delete this mission?')) return
     try {
-      await del(`/missions/${mission.mission_id}`)
-      fetchMissions()
-    } catch {
-      // error handled by useApi
+      await api.delete(`/missions/${mission.mission_id}`)
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to delete mission')
     }
   }
 
@@ -108,10 +124,19 @@ export default function Missions() {
         </div>
       </div>
 
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
+
       <SearchFilter
         onSearch={setSearch}
         onFilter={setFilters}
-        filters={[{ key: 'status', label: 'Status', options: statusFilters }]}
+        filters={[
+          { key: 'status', label: 'Status', options: statusFilters },
+          { key: 'mission_type', label: 'Type', options: typeFilters },
+        ]}
         placeholder="Search missions..."
       />
 
@@ -143,15 +168,16 @@ export default function Missions() {
                 <label className="block text-sm font-medium text-space-700 mb-1">Mission Name *</label>
                 <input name="mission_name" defaultValue={editingMission?.mission_name} className="input-field" required />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Launch Date</label>
-                  <input name="launch_date" type="date" defaultValue={editingMission?.launch_date?.split('T')[0]} className="input-field" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">End Date</label>
-                  <input name="end_date" type="date" defaultValue={editingMission?.end_date?.split('T')[0]} className="input-field" />
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Mission Type *</label>
+                <select name="mission_type" defaultValue={editingMission?.mission_type || 'UNCREWED'} className="input-field" required>
+                  <option value="CREWED">Crewed</option>
+                  <option value="UNCREWED">Uncrewed</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Launch Date *</label>
+                <input name="launch_date" type="date" defaultValue={editingMission?.launch_date?.split('T')[0]} className="input-field" required />
               </div>
               <div>
                 <label className="block text-sm font-medium text-space-700 mb-1">Status</label>
@@ -163,18 +189,12 @@ export default function Missions() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-space-700 mb-1">Objective</label>
-                <textarea name="objective" defaultValue={editingMission?.objective} rows={3} className="input-field" />
+                <label className="block text-sm font-medium text-space-700 mb-1">Objective *</label>
+                <textarea name="objective" defaultValue={editingMission?.objective} rows={3} className="input-field" required />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Budget</label>
-                  <input name="budget" type="number" step="0.01" defaultValue={editingMission?.budget} className="input-field" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Lead Agency</label>
-                  <input name="lead_agency" defaultValue={editingMission?.lead_agency} className="input-field" />
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Agency Name *</label>
+                <input name="agency_name" defaultValue={editingMission?.agency_name} className="input-field" required />
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>

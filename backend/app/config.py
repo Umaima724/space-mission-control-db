@@ -5,7 +5,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     db_user: str = "SPACE_ADMIN"
     db_password: str = "password"
-    db_dsn: str = "localhost:1521/XEPDB1"
+    db_dsn: str = "localhost:1521/xe"
     secret_key: str = "change-me-in-production"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
@@ -16,4 +16,6 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    print(f"DEBUG: DSN = '{settings.db_dsn}'")  # Check for hidden quotes!
+    return settings

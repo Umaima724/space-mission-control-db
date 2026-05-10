@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import DataGrid from '../components/DataGrid'
 import SearchFilter from '../components/SearchFilter'
-import { useApi } from '../hooks/useApi'
+import api from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 
 const stationColumns = [
@@ -10,9 +10,8 @@ const stationColumns = [
   { key: 'location', label: 'Location' },
   { key: 'latitude', label: 'Latitude' },
   { key: 'longitude', label: 'Longitude' },
-  { key: 'elevation_m', label: 'Elevation (m)' },
-  { key: 'status', label: 'Status', type: 'status' },
-  { key: 'antenna_count', label: 'Antennas' },
+  { key: 'operational', label: 'Operational', type: 'status' },
+  { key: 'frequency_range', label: 'Frequency Range' },
 ]
 
 export default function GroundStations() {
@@ -23,54 +22,65 @@ export default function GroundStations() {
   const [filters, setFilters] = useState({})
   const [showModal, setShowModal] = useState(false)
   const [editingStation, setEditingStation] = useState(null)
-  const { get, post, put, del, loading } = useApi()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const { hasRole } = useAuth()
 
-  const fetchStations = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+
     const params = new URLSearchParams()
     params.append('page', page)
     params.append('page_size', 10)
     if (search) params.append('search', search)
+    if (filters.operational) params.append('operational', filters.operational)
 
-    const data = await get(`/ground-stations?${params}`)
-    setStations(data.items || [])
-    setTotal(data.total || 0)
-  }, [page, search, get])
+    api.get(`/ground-stations?${params}`)
+      .then(res => {
+        if (!cancelled) {
+          setStations(res.data.items || [])
+          setTotal(res.data.total || 0)
+        }
+      })
+      .catch(err => {
+        if (!cancelled) setError(err.response?.data?.detail || 'Failed to load stations')
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
 
-  useEffect(() => {
-    fetchStations()
-  }, [fetchStations])
+    return () => { cancelled = true }
+  }, [page, search, filters])
 
   const handleSave = async (e) => {
     e.preventDefault()
     const formData = new FormData(e.target)
     const payload = Object.fromEntries(formData)
+    if (payload.center_id) payload.center_id = parseInt(payload.center_id)
     if (payload.latitude) payload.latitude = parseFloat(payload.latitude)
     if (payload.longitude) payload.longitude = parseFloat(payload.longitude)
-    if (payload.elevation_m) payload.elevation_m = parseFloat(payload.elevation_m)
-    if (payload.antenna_count) payload.antenna_count = parseInt(payload.antenna_count)
 
     try {
       if (editingStation) {
-        await put(`/ground-stations/${editingStation.station_id}`, payload)
+        await api.put(`/ground-stations/${editingStation.station_id}`, payload)
       } else {
-        await post('/ground-stations', payload)
+        await api.post('/ground-stations', payload)
       }
       setShowModal(false)
       setEditingStation(null)
-      fetchStations()
-    } catch {
-      // handled
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save station')
     }
   }
 
   const handleDelete = async (station) => {
     if (!confirm('Delete this ground station?')) return
     try {
-      await del(`/ground-stations/${station.station_id}`)
-      fetchStations()
-    } catch {
-      // handled
+      await api.delete(`/ground-stations/${station.station_id}`)
+      setPage(1)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to delete station')
     }
   }
 
@@ -89,9 +99,21 @@ export default function GroundStations() {
         )}
       </div>
 
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+          {error}
+        </div>
+      )}
+
       <SearchFilter
         onSearch={setSearch}
         onFilter={setFilters}
+        filters={[
+          { key: 'operational', label: 'Operational', options: [
+            { value: 'Y', label: 'Yes' },
+            { value: 'N', label: 'No' },
+          ]},
+        ]}
         placeholder="Search stations..."
       />
 
@@ -120,36 +142,37 @@ export default function GroundStations() {
             </div>
             <form onSubmit={handleSave} className="p-6 space-y-4">
               <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Center ID</label>
+                <input name="center_id" type="number" defaultValue={editingStation?.center_id} className="input-field" />
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-space-700 mb-1">Station Name *</label>
                 <input name="station_name" defaultValue={editingStation?.station_name} className="input-field" required />
               </div>
               <div>
-                <label className="block text-sm font-medium text-space-700 mb-1">Location</label>
-                <input name="location" defaultValue={editingStation?.location} className="input-field" />
+                <label className="block text-sm font-medium text-space-700 mb-1">Location *</label>
+                <input name="location" defaultValue={editingStation?.location} className="input-field" required />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Latitude</label>
-                  <input name="latitude" type="number" step="any" defaultValue={editingStation?.latitude} className="input-field" />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Latitude *</label>
+                  <input name="latitude" type="number" step="any" defaultValue={editingStation?.latitude} className="input-field" required />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Longitude</label>
-                  <input name="longitude" type="number" step="any" defaultValue={editingStation?.longitude} className="input-field" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Elevation (m)</label>
-                  <input name="elevation_m" type="number" step="0.1" defaultValue={editingStation?.elevation_m} className="input-field" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-space-700 mb-1">Antenna Count</label>
-                  <input name="antenna_count" type="number" defaultValue={editingStation?.antenna_count} className="input-field" />
+                  <label className="block text-sm font-medium text-space-700 mb-1">Longitude *</label>
+                  <input name="longitude" type="number" step="any" defaultValue={editingStation?.longitude} className="input-field" required />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-space-700 mb-1">Status</label>
-                <input name="status" defaultValue={editingStation?.status} className="input-field" />
+                <label className="block text-sm font-medium text-space-700 mb-1">Operational</label>
+                <select name="operational" defaultValue={editingStation?.operational || 'Y'} className="input-field">
+                  <option value="Y">Yes</option>
+                  <option value="N">No</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-space-700 mb-1">Frequency Range *</label>
+                <input name="frequency_range" defaultValue={editingStation?.frequency_range} className="input-field" required />
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
