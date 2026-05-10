@@ -1,0 +1,44 @@
+# ======================
+# ENV FILES (VERY IMPORTANT)
+# ======================
+backend/.env
+
+# ======================
+# PYTHON BACKEND
+# ======================
+backend/__pycache__/
+backend/**/*.pyc
+*.pyc
+
+# Virtual environment
+backend/venv/
+.env/
+
+# Logs
+*.log
+
+# ======================
+# FRONTEND (React/Vite)
+# ======================
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.vite/
+
+# ======================
+# IDE FILES
+# ======================
+.vscode/
+.idea/
+
+# ======================
+# OS FILES
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# DATABASE EXPORTS (optional)
+# ======================
+*.dmp
+*.log
